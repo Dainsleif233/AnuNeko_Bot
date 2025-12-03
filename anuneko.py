@@ -1,39 +1,17 @@
 import json
 import os
 import httpx
-from nonebot import on_command
-from nonebot.adapters.onebot.v11 import Message
-from nonebot.params import CommandArg
 
-# ============================================================
-# API 地址
-# ============================================================
-
-CHAT_API_URL = "https://anuneko.com/api/v1/chat"
-STREAM_API_URL = "https://anuneko.com/api/v1/msg/{uuid}/stream"
-SELECT_CHOICE_URL = "https://anuneko.com/api/v1/msg/select-choice"
-SELECT_MODEL_URL = "https://anuneko.com/api/v1/user/select_model"
-
-DEFAULT_TOKEN = (
-    "x-token 自己改"
-)
-
-# 每个 QQ 用户一个独立会话
+# 每个 QQ 用户/群组一个独立会话
 user_sessions = {}
-# 每个 QQ 用户的当前模型
+# 每个 QQ 用户/群组的当前模型
 user_models = {}  # user_id: "Orange Cat" or "Exotic Shorthair"
-
-WATERMARK = "\n\n—— 内容由 anuneko.com 提供，该服务只是一个第三方前端"
-
 
 # ============================================================
 #             异步 httpx 请求封装
 # ============================================================
 
 def build_headers():
-    token = os.environ.get("ANUNEKO_TOKEN", DEFAULT_TOKEN)
-    cookie = os.environ.get("ANUNEKO_COOKIE")
-
     headers = {
         "accept": "*/*",
         "content-type": "application/json",
@@ -43,11 +21,8 @@ def build_headers():
         "x-app_id": "com.anuttacon.neko",
         "x-client_type": "4",
         "x-device_id": "7b75a432-6b24-48ad-b9d3-3dc57648e3e3",
-        "x-token": token,
+        "x-token": os.getenv("ANUNEKO_TOKEN"),
     }
-
-    if cookie:
-        headers["Cookie"] = cookie
 
     return headers
 
@@ -63,7 +38,7 @@ async def create_new_session(user_id: str):
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(CHAT_API_URL, headers=headers, content=data)
+            resp = await client.post(os.getenv("CHAT_API_URL"), headers=headers, content=data)
             resp_json = resp.json()
 
         chat_id = resp_json.get("chat_id") or resp_json.get("id")
@@ -89,7 +64,7 @@ async def switch_model(user_id: str, chat_id: str, model_name: str):
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(SELECT_MODEL_URL, headers=headers, content=data)
+            resp = await client.post(os.getenv("SELECT_MODEL_URL"), headers=headers, content=data)
             if resp.status_code == 200:
                 user_models[user_id] = model_name
                 return True
@@ -109,7 +84,7 @@ async def send_choice(msg_id: str):
 
     try:
         async with httpx.AsyncClient(timeout=5) as client:
-            await client.post(SELECT_CHOICE_URL, headers=headers, content=data)
+            await client.post(os.getenv("SELECT_CHOICE_URL"), headers=headers, content=data)
     except:
         pass
 
@@ -120,15 +95,11 @@ async def send_choice(msg_id: str):
 
 async def stream_reply(session_uuid: str, text: str) -> str:
     headers = {
-        "x-token": os.environ.get("ANUNEKO_TOKEN", DEFAULT_TOKEN),
+        "x-token": os.getenv("ANUNEKO_TOKEN"),
         "Content-Type": "text/plain",
     }
 
-    cookie = os.environ.get("ANUNEKO_COOKIE")
-    if cookie:
-        headers["Cookie"] = cookie
-
-    url = STREAM_API_URL.format(uuid=session_uuid)
+    url = os.getenv("STREAM_API_URL").format(uuid=session_uuid)
     data = json.dumps({"contents": [text]}, ensure_ascii=False)
 
     result = ""
@@ -191,25 +162,11 @@ async def stream_reply(session_uuid: str, text: str) -> str:
 
     return result
 
-
-# ============================================================
-#                NoneBot 指令
-# ============================================================
-
-chat_cmd = on_command("chat", aliases={"对话"})
-new_cmd = on_command("new", aliases={"新会话"})
-switch_cmd = on_command("switch", aliases={"切换"})
-
-
 # ---------------------------
 #   /switch 切换模型
 # ---------------------------
 
-@switch_cmd.handle()
-async def _(event, args: Message = CommandArg()):
-    user_id = str(event.user_id)
-    arg = args.extract_plain_text().strip()
-
+async def switch(id: str, arg: str):
     if "橘猫" in arg or "orange" in arg.lower():
         target_model = "Orange Cat"
         target_name = "橘猫"
@@ -217,64 +174,61 @@ async def _(event, args: Message = CommandArg()):
         target_model = "Exotic Shorthair"
         target_name = "黑猫"
     else:
-        await switch_cmd.finish("请指定要切换的模型：橘猫 / 黑猫")
-        return
+        return "请指定要切换的模型：橘猫 / 黑猫"
 
     # 获取当前会话ID，如果没有则新建
-    if user_id not in user_sessions:
-        chat_id = await create_new_session(user_id)
+    if id not in user_sessions:
+        chat_id = await create_new_session(id)
         if not chat_id:
-             await switch_cmd.finish("❌ 切换失败：无法创建会话")
-             return
+             return "❌ 切换失败：无法创建会话"
     else:
-        chat_id = user_sessions[user_id]
+        chat_id = user_sessions[id]
 
-    success = await switch_model(user_id, chat_id, target_model)
+    success = await switch_model(id, chat_id, target_model)
     
     if success:
-        await switch_cmd.finish(f"✨ 已切换为：{target_name}")
+        return f"✨ 已切换为：{target_name}"
     else:
-        await switch_cmd.finish(f"❌ 切换为 {target_name} 失败")
+        return f"❌ 切换为 {target_name} 失败"
 
 
 # ---------------------------
 #   /new 创建新会话
 # ---------------------------
 
-@new_cmd.handle()
-async def _(event):
-    user_id = str(event.user_id)
-
-    new_id = await create_new_session(user_id)
+async def new(id: str):
+    new_id = await create_new_session(id)
 
     if new_id:
-        model_name = "橘猫" if user_models.get(user_id) == "Orange Cat" else "黑猫"
-        await new_cmd.finish(f"✨ 已创建新的会话（当前模型：{model_name}）！")
+        model_name = "橘猫" if user_models.get(id) == "Orange Cat" else "黑猫"
+        return f"✨ 已创建新的会话（当前模型：{model_name}）！"
     else:
-        await new_cmd.finish("❌ 创建会话失败，请稍后再试。")
+        return "❌ 创建会话失败，请稍后再试。"
 
 
 # ---------------------------
 #   /chat 进行对话
 # ---------------------------
 
-@chat_cmd.handle()
-async def _(event, args: Message = CommandArg()):
-    user_id = str(event.user_id)
-    text = args.extract_plain_text().strip()
-
+async def chat(id: str, text: str):
     if not text:
-        await chat_cmd.finish("❗ 请输入内容，例如：/chat 你好")
+        return "❗ 请输入内容，例如：/chat 你好"
 
     # 自动创建会话
-    if user_id not in user_sessions:
-        cid = await create_new_session(user_id)
+    if id not in user_sessions:
+        cid = await create_new_session(id)
         if not cid:
-            await chat_cmd.finish("❌ 创建会话失败，请稍后再试。")
+            return "❌ 创建会话失败，请稍后再试。"
 
-    session_id = user_sessions[user_id]
+    session_id = user_sessions[id]
     reply = await stream_reply(session_id, text)
 
-    reply += WATERMARK
+    return reply
 
-    await chat_cmd.finish(reply)
+async def handle(id: str, content: str):
+    text = content.lstrip()
+    if text.startswith("/switch "):
+        return await switch(id, text[8:])
+    if text.startswith("/new"):
+        return await new(id)
+    return await chat(id, text)
