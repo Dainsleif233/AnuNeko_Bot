@@ -207,12 +207,12 @@ async def new(id: str):
 
 
 # ---------------------------
-#   /chat 进行对话
+#   进行对话
 # ---------------------------
 
 async def chat(id: str, text: str):
     if not text:
-        return "❗ 请输入内容，例如：/chat 你好"
+        return "❗ 请输入内容，例如：你好"
 
     # 自动创建会话
     if id not in user_sessions:
